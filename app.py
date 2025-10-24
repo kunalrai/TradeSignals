@@ -1,4 +1,4 @@
-import requests
+import ccxt
 import time
 import pandas as pd
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ import sys
 class SOLAlertSystem:
     def __init__(self):
         self.symbol = "SOL/USDT"
-        self.api_base = "https://api.binance.com/api/v3"
+        self.exchange = ccxt.binance()  # Initialize CCXT Binance exchange
         self.price_history = deque(maxlen=50)  # Store last 50 15-min candles for EMA
         self.ema_period = 50
         self.alert_threshold = 0.01
@@ -18,56 +18,51 @@ class SOLAlertSystem:
         self.alert_cooldown = 300  # 5 minutes cooldown between alerts
         
     def get_current_price(self):
-        """Fetch current SOL price from Binance API"""
+        """Fetch current SOL price using CCXT"""
         try:
-            url = f"{self.api_base}/ticker/price"
-            params = {"symbol": "SOLUSDT"}
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = requests.get(url, params=params, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            return float(data['price'])
-        except requests.exceptions.RequestException as e:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            return float(ticker['last'])
+        except ccxt.NetworkError as e:
             print(f"Network error fetching current price: {e}")
+            return None
+        except ccxt.ExchangeError as e:
+            print(f"Exchange error fetching current price: {e}")
             return None
         except Exception as e:
             print(f"Error fetching current price: {e}")
             return None
     
     def get_15min_klines(self, limit=50):
-        """Fetch 15-minute kline data from Binance"""
+        """Fetch 15-minute OHLCV data using CCXT"""
         try:
-            url = f"{self.api_base}/klines"
-            params = {
-                "symbol": "SOLUSDT",
-                "interval": "15m",
-                "limit": limit
-            }
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Extract closing prices
-            closes = []
-            for kline in data:
-                closes.append(float(kline[4]))  # Close price is at index 4
-            
+            ohlcv = self.exchange.fetch_ohlcv(self.symbol, '15m', limit=limit)
+            # Extract closing prices (close is at index 4 in OHLCV)
+            closes = [candle[4] for candle in ohlcv]
             return closes
+        except ccxt.NetworkError as e:
+            print(f"Network error fetching OHLCV data: {e}")
+            return None
+        except ccxt.ExchangeError as e:
+            print(f"Exchange error fetching OHLCV data: {e}")
+            return None
         except Exception as e:
-            print(f"Error fetching kline data: {e}")
+            print(f"Error fetching OHLCV data: {e}")
             return None
     
     def calculate_ema(self, prices, period):
-        """Calculate Exponential Moving Average"""
+        """Calculate Exponential Moving Average using efficient method"""
         if len(prices) < period:
             return None
         
-        # Convert to pandas Series for easier EMA calculation
-        series = pd.Series(prices)
-        ema = series.ewm(span=period, adjust=False).mean()
-        return ema.iloc[-1]  # Return the latest EMA value
+        # Start with simple moving average for first value
+        ema = [sum(prices[:period]) / period]
+        multiplier = 2 / (period + 1)
+        
+        # Calculate EMA for remaining values
+        for price in prices[period:]:
+            ema.append(((price - ema[-1]) * multiplier) + ema[-1])
+        
+        return ema[-1]  # Return the latest EMA value
     
     def initialize_price_history(self):
         """Initialize price history with recent 15-min klines"""
@@ -138,10 +133,10 @@ Threshold: ${self.alert_threshold}
     def update_price_history(self):
         """Update price history with latest 15-min candle close"""
         try:
-            # Get the latest completed 15-min candle
-            klines = self.get_15min_klines(2)  # Get last 2 candles
-            if klines and len(klines) >= 2:
-                latest_close = klines[-2]  # Use the second-to-last (completed candle)
+            # Get the latest 2 completed 15-min candles
+            ohlcv = self.exchange.fetch_ohlcv(self.symbol, '15m', limit=2)
+            if ohlcv and len(ohlcv) >= 2:
+                latest_close = ohlcv[-2][4]  # Use the second-to-last (completed candle)
                 
                 # Only add if it's different from the last price in history
                 if not self.price_history or latest_close != self.price_history[-1]:
@@ -202,7 +197,7 @@ def main():
     
     # You can customize these parameters
     alert_system.alert_threshold = 0.01  # Gap threshold in USD
-    alert_system.alert_cooldown = 60    # 1 minute between alerts
+    alert_system.alert_cooldown = 300    # 5 minutes between alerts (changed back to 300)
     
     # Start monitoring
     alert_system.run_monitor()
