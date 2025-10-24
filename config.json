@@ -1,0 +1,13 @@
+{
+    "symbol": "SOLUSDT",
+    "ema_period": 50,
+    "timeframe": "15m",
+    "alert_threshold": 0.01,
+    "alert_cooldown": 300,
+    "check_interval": 30,
+    "history_update_interval": 900,
+    "api_settings": {
+        "timeout": 10,
+        "base_url": "https://api.binance.com/api/v3"
+    }
+}
